@@ -1,0 +1,897 @@
+clear;
+clc;
+rng(1992)
+%Entering values:
+
+%Variable values (info. up to 03-08-26 (inclusive)):
+date = "03-08-2026";
+p_beat_e190 = 0.0519;
+p_beat_737  = 0.1634;
+steps = 1000000; %Beats to simulate
+capacity = 3; %Of simultaneous bay-service
+beat = 6; %Unit of measurement minutes; 1 beat equals to X minutes
+e190_service_beats = 3;
+b737_service_beats = 5;
+tolerance = 0.00001;
+
+
+% Arrival representations
+e190_arrival = [0 0 1 0 0];
+b737_arrival = [0 0 0 0 1];
+no_arrival = [0 0 0 0 0];
+
+%Fixed values, does not change:
+hours_per_day = 24;
+mins_per_hour = 60;
+
+%Calculating from above:
+p_beat_arrival = p_beat_e190 + p_beat_737;
+p_beat_non_arrival = 1 - (p_beat_arrival);
+beats_per_day = (hours_per_day * mins_per_hour) / beat;
+%---------------------------P1---------------------------------------------
+fprintf("Last time info. updated: %s, where p_beat_e190: %.4f, p_beat737: %.4f and p_non_arrival= %.4f\n", date, p_beat_e190, p_beat_737, p_beat_non_arrival)
+
+%Generating all possible states:
+h = 5;
+b = 3;
+valid_states = [];
+for p1 = 0:b
+    for p2 = 0:b
+        for p3 = 0:b
+            for p4 = 0:b
+                for p5 = 0:b
+                    candidate_state = [p1 p2 p3 p4 p5];
+                    if sum(candidate_state) <= capacity
+                        valid_states(end+1, :) = candidate_state;
+                    end
+                end
+            end
+        end
+    end
+end
+
+n_states_raw = size(valid_states, 1);
+
+fprintf("Number of possible states: %d\n", n_states_raw);
+fprintf("Possible states generated OK.-\n")
+
+
+%Trimming to reachable states (J(0:3,5)):
+possible_states = valid_states; %56 raw states
+reachable_states = zeros(1, h); %Starting from 'empty state'
+state_to_check = 1;
+
+while state_to_check <= size(reachable_states, 1)
+    current_state = reachable_states(state_to_check, :);
+    shifted_state = [current_state(2:end), 0]; %Shifting state
+    possible_next_states = shifted_state; %no arrival
+    candidate_state = shifted_state; %e190 arrival
+    candidate_state(e190_service_beats) = candidate_state(e190_service_beats) + 1;
+
+    if sum(candidate_state) <= capacity
+        possible_next_states(end+1, :) = candidate_state;
+    end
+    candidate_state = shifted_state; %737 arrival
+    candidate_state(b737_service_beats) = candidate_state(b737_service_beats) + 1;
+    if sum(candidate_state) <= capacity
+        possible_next_states(end+1, :) = candidate_state;
+    end
+    for next = 1:size(possible_next_states, 1) %possible next states
+        candidate_state = possible_next_states(next, :);
+        is_possible = ismember(candidate_state, possible_states, "rows");
+        reached_OK = ismember(candidate_state, reachable_states, "rows");
+        if is_possible && ~reached_OK
+            reachable_states(end+1, :) = candidate_state;
+        end
+    end
+    state_to_check = state_to_check + 1; %move to the next state
+end
+
+valid_states = reachable_states;
+n_states = size(valid_states, 1);
+
+discarded_states = n_states_raw - n_states;
+
+fprintf("Number of reachable states: %d. Hence, %d states were discarded.\n", n_states, discarded_states);
+
+fprintf("Reachable states are:\n");
+disp(valid_states);
+
+fprintf("\n--------------------------P1 RUN OK--------------------------\n")
+%---------------------------P2---------------------------------------------
+
+P_trans_matrix = zeros(n_states, n_states);
+
+%Initialising rejection vectors:
+
+for current_state_number = 1:n_states
+    current_state = valid_states(current_state_number, :);
+    shifted_state = [current_state(2:end), 0]; %Shift, then append 0
+
+%---Event 1: No arrival
+    next_state = shifted_state;
+    next_state_number = find(all(valid_states == next_state, 2)); %Finding state
+    if isempty(next_state_number)
+        fprintf("'No arrival' state was not found:\n")
+        disp(next_state)
+    end
+
+    P_trans_matrix(current_state_number, next_state_number) = (P_trans_matrix(current_state_number, next_state_number) + p_beat_non_arrival); %Adding "p_non_arrival" to Trans. matrix "P"
+
+%---Event 2: e190 - Can an e190 be added?
+    candidate_state = shifted_state;
+    candidate_state(e190_service_beats) = candidate_state(e190_service_beats) + 1;
+    if sum(candidate_state) <= capacity
+        next_state = candidate_state; %Accepted
+    else
+        next_state = shifted_state; %Rejected
+    end
+    next_state_number = find(all(valid_states == next_state, 2)); %Finding state
+    if isempty(next_state_number)
+        fprintf("Following 'e190' state was not found:\n")
+        disp(next_state)
+    end
+    P_trans_matrix(current_state_number, next_state_number) = (P_trans_matrix (current_state_number, next_state_number) + p_beat_e190); %Adding "p_beat_e190" to Trans. matrix "P"
+
+%---Event 3: 737 - Can a 737 be added?
+    candidate_state = shifted_state;
+    candidate_state(b737_service_beats) = candidate_state(b737_service_beats) + 1;
+    if sum(candidate_state) <= capacity
+        next_state = candidate_state; %Accepted
+    else
+        next_state = shifted_state;
+    end
+    next_state_number = find(all(valid_states == next_state, 2));
+    if isempty(next_state_number)
+        fprintf("Following '737' state was not found:\n")
+        disp(next_state)
+    end
+    P_trans_matrix(current_state_number, next_state_number) = (P_trans_matrix (current_state_number, next_state_number) + p_beat_737);%Adding "p_beat_737" to Trans. matrix "P"
+end
+
+fprintf("Transition matrix (P), with arrival probs. = Markov matrix generated OK.-\n")
+%disp(P_trans_matrix)
+
+fprintf("Row sums (should all be 1, otherwise check that row's probs):\n")
+disp(sum(P_trans_matrix, 2).')
+
+
+%Heatmap plot in white and red:
+red_map = [ones(256,1), linspace(1,0,256)', linspace(1,0,256)'];
+P_plot = [P_trans_matrix, nan(n_states,1);nan(1,n_states + 1)];
+figure;
+matrix_plot = pcolor(0:n_states, 0:n_states, P_plot);
+matrix_plot.EdgeColor = [0.75 0.75 0.75];
+matrix_plot.LineWidth = 0.3;
+colormap(red_map);
+clim([0 max(P_trans_matrix(:))]);
+ax = gca;
+ax.XAxisLocation = "top";
+ax.YDir = "reverse";
+ax.FontSize = 12;
+ax.XTick = 0.5:1:n_states;
+ax.YTick = 0.5:1:n_states;
+state_labels = join(string(valid_states), " ", 2);
+ax.XTickLabel = state_labels;
+ax.YTickLabel = state_labels;
+axis tight;
+axis square;
+xlabel("Following state", "FontSize", 14);
+ylabel("Current state","FontSize", 14);
+title("Transition probability matrix 'P' for J(0:3,5)","FontSize", 20);
+c = colorbar;
+c.FontSize = 14;
+c.Label.String = "Transition probability";
+xtickangle(ax, 90);
+ytickangle(ax,0);
+ax.XTickLabelRotationMode = "manual";
+fprintf("\n--------------------------P2 RUN OK--------------------------\n")
+%---------------------------P3---------------------------------------------
+
+%Step 3 - Checking whether a distribution (vector v) is stationary for P (transition matrix):
+    [eig_vector, eig_value] = eig (P_trans_matrix');
+    eigenvalues = diag(eig_value); %extracting eigenvalue
+    fprintf("Eigenvalues:\n")
+    disp(diag(eig_value'))
+    column_eig = find(abs(eigenvalues - 1) < tolerance); %Automatically choosing the column with the value closer to 1
+    fprintf("Number of eigenvalues equal to 1: %d\n", length(column_eig))
+    if length(column_eig) ~= 1
+        fprintf("There is %d egenvalues equal to 1!", length(column_eig))
+    end
+    fprintf("Selected eigenvector column: %d\n", column_eig)
+    v = real(eig_vector(:, column_eig)); % extracting eigenvector
+    v = v / sum(v); %Normalising the eigenvector (so the probs add to 1)
+    fprintf("Double checking (v * P = v)") %Double checking selection is correct
+    v_step = v' * P_trans_matrix;
+    diff_v = norm(v_step - v'); % Difference between v and v*P (should be close to zero)
+    fprintf("    Difference (should be close to 0): %.10f\n", diff_v)
+    fprintf("    Used tolerance: %.4d\n", tolerance);
+    if diff_v < tolerance
+        fprintf("    -> v IS the stationary distribution\n")
+    else
+        fprintf("    -> v is NOT the stationary distribution, please check it again\n")
+    end
+
+    fprintf("Theoretical stationary distribution:\n")
+    disp(v')
+    
+
+    number_eigenvalues = length(eigenvalues);
+    eigenvalue_modulo = abs(eigenvalues);
+    figure;
+    eigenvalue_bars = bar(1:number_eigenvalues, eigenvalue_modulo);
+    xlabel("Eigenvector column", "FontSize", 14);
+    ylabel("Absolute eigenvalue (|\lambda|)", "FontSize", 14);
+    title("J(0:3,5) - Absolute values of the transition matrix eigenvalues", "FontSize", 16);
+    xticks(1:number_eigenvalues);
+    ylim([0, 1]);
+
+fprintf("\n--------------------------P3 RUN OK--------------------------\n")
+%---------------------------P4---------------------------------------------
+%Iteration to check convergence to the stationary distribution:
+%Starting from a single state, randomly jumping to neighbours
+% Recording visit frequency to approximate stationary distribution
+
+
+%Plus, Im going to plot to visually represent the distribution convergence,
+%the distance will be measured using residual sum of squares (RSS), which
+%shows how far the current position (or current distribution) is from the
+%theoretical stationary ditribution (v).
+%Intuitively the smaller RSS, the closer to v.
+
+fprintf("For h=5; capacity=3:\n")
+%---------------------Starting point: p0(1)--------------------------------
+fprintf("\n________________________SIMULATION 1________________________\n")
+fprintf("Starting from State (p0(1)):\n") 
+curr_state = find(all(valid_states == [0 0 0 0 0], 2), 1); %Starting from [0 0 0]
+visit_count = zeros (1, n_states);%To store state visits at each step
+rss_time_state1 = zeros (steps, 1); %To store RSS at each step
+state_history1 = zeros(steps,1); %To store States at each step
+simulation_counter1_e190 = 0; %Seated e190
+simulation_counter1_737 = 0; %Seated 737
+rejected_counter1_e190 = 0; %Rejected e190
+rejected_counter1_737 = 0; %Rejected 737
+fprintf("    Set starting state:")
+disp(curr_state)
+fprintf("    Visit counts set to 0.-")
+
+for time = 1:steps
+    prev_state = curr_state;
+    current_vec = valid_states(prev_state, :);
+    shifted_vec = [current_vec(2:end), 0]; %Depart + shift
+    r = rand;
+    if r < p_beat_non_arrival %Event 1: No arrival
+        next_vec = shifted_vec;
+    elseif r < p_beat_non_arrival + p_beat_e190 % Event 2: e190
+        candidate_vec = shifted_vec;
+        candidate_vec(e190_service_beats) = candidate_vec(e190_service_beats) + 1;
+        if sum(candidate_vec) <= capacity
+            next_vec = candidate_vec; %Seated
+            simulation_counter1_e190 = simulation_counter1_e190 + 1;
+        else
+            next_vec = shifted_vec; %Rejected
+            rejected_counter1_e190 = rejected_counter1_e190 + 1;
+        end
+    else % Event 3: 737
+        candidate_vec = shifted_vec; 
+        candidate_vec(b737_service_beats) = candidate_vec(b737_service_beats) + 1;
+        if sum(candidate_vec) <= capacity
+            next_vec = candidate_vec; % Seated
+            simulation_counter1_737 = simulation_counter1_737 + 1;
+        else
+            next_vec = shifted_vec; %Rejected
+            rejected_counter1_737 = rejected_counter1_737 + 1;
+        end
+    end
+    
+    curr_state = find(all(valid_states == next_vec, 2), 1);
+    state_history1(time) = curr_state;
+    visit_count(curr_state) = visit_count(curr_state) +1;
+    observed_distr = visit_count/time;
+    rss_time_state1(time) = sum ((observed_distr - v').^2);
+end
+
+sim_seated_total1 = simulation_counter1_e190 + simulation_counter1_737;
+sim_rejected_total1 = rejected_counter1_e190 + rejected_counter1_737;
+sim_arrivals_total1 = sim_seated_total1 + sim_rejected_total1;
+sim_rejection_rate1_e190 = (rejected_counter1_e190/(simulation_counter1_e190+rejected_counter1_e190))*100;
+sim_rejection_rate1_737 = (rejected_counter1_737/(simulation_counter1_737+rejected_counter1_737))*100;
+sim_rejection_rate_total1 = (sim_rejected_total1/sim_arrivals_total1)*100;
+sim_arrivals1_e190 = simulation_counter1_e190 + rejected_counter1_e190;
+sim_arrivals1_737  = simulation_counter1_737  + rejected_counter1_737;
+
+sim_arr_beat1_e190  = sim_arrivals1_e190/steps;
+sim_serv_beat1_e190 = simulation_counter1_e190/steps;
+sim_rej_beat1_e190  = rejected_counter1_e190/steps;
+
+sim_arr_beat1_737   = sim_arrivals1_737/steps;
+sim_serv_beat1_737  = simulation_counter1_737/steps;
+sim_rej_beat1_737   = rejected_counter1_737/steps;
+
+sim_arr_beat1_total  = sim_arrivals_total1/steps;
+sim_serv_beat1_total = sim_seated_total1/steps;
+sim_rej_beat1_total  = sim_rejected_total1/steps;
+
+fprintf("\n\nRESULTS - From State 1 [0 0 0 0 0] (empty):\n")
+
+fprintf("After %d beats:\n", steps)
+fprintf(" -e190:\n")
+fprintf("    Arrivals: %d\n", sim_arrivals1_e190)
+fprintf("    Effectively seated: %d\n", simulation_counter1_e190)
+fprintf("    Rejected: %d\n", rejected_counter1_e190)
+
+fprintf(" -737:\n")
+fprintf("    Arrivals: %d\n", sim_arrivals1_737)
+fprintf("    Effectively seated: %d\n", simulation_counter1_737)
+fprintf("    Rejected: %d\n", rejected_counter1_737)
+
+fprintf(" -Total:\n")
+fprintf("    Arrivals: %d\n", sim_arrivals_total1)
+fprintf("    Serviced: %d\n", sim_seated_total1)
+fprintf("    Rejected: %d\n", sim_rejected_total1)
+
+
+fprintf("\nPer beat:\n")
+fprintf(" -e190:\n    Arrivals %.4f\n    Effectively seated %.4f\n    Rejected: %.4f\n", sim_arr_beat1_e190, sim_serv_beat1_e190, sim_rej_beat1_e190)
+fprintf(" -737:\n    Arrivals %.4f\n    Effectively seated %.4f\n    Rejected: %.4f\n", sim_arr_beat1_737, sim_serv_beat1_737, sim_rej_beat1_737)
+fprintf(" -Total:\n    Arrivals %.4f\n    Effectively seated %.4f\n    Rejected: %.4f\n", sim_arr_beat1_total, sim_serv_beat1_total, sim_rej_beat1_total)
+
+
+fprintf("\n    Rejection rate total: %.4f%%\n", sim_rejection_rate_total1)
+fprintf("    Rejection rate 737: %.4f%%\n", sim_rejection_rate1_737)
+fprintf("    Rejection rate e190: %.4f%%\n", sim_rejection_rate1_e190)
+
+
+%---------------------Starting point: p0(39)--------------------------------
+fprintf("\n")
+fprintf("\n________________________SIMULATION 2________________________\n")
+%	State 39	->	[2 0 0 1 0] 
+
+curr_state = find(all(valid_states == [2 0 0 1 0], 2), 1); %Starting from [2 0 0 1 0]
+fprintf("Starting from State (p0(%d)):\n", curr_state)
+visit_count = zeros (1, n_states); %To count states at each visit
+rss_time_state2 = zeros (steps, 1); %To store RSS at each step
+state_history2 = zeros(steps,1); %To store States at each step
+simulation_counter2_e190 = 0; %Seated e190
+simulation_counter2_737 = 0; %Seated 737
+rejected_counter2_e190 = 0; %Rejected e190
+rejected_counter2_737 = 0; %Rejected 737
+
+fprintf("    Set starting state:")
+disp(curr_state)
+fprintf("    Visit counts set to 0.-")
+
+for time = 1:steps
+prev_state = curr_state;
+    current_vec = valid_states(prev_state, :);
+    shifted_vec = [current_vec(2:end), 0];   %Depart + shift
+    r = rand;
+    if r < p_beat_non_arrival %Event 1: No arrival
+        next_vec = shifted_vec;
+    elseif r < p_beat_non_arrival + p_beat_e190 %Event 2:e190
+        candidate_vec = shifted_vec;
+        candidate_vec(e190_service_beats) = candidate_vec(e190_service_beats) + 1;
+        if sum(candidate_vec) <= capacity
+            next_vec = candidate_vec; %Seated
+            simulation_counter2_e190 = simulation_counter2_e190 + 1;
+        else
+            next_vec = shifted_vec; %Rejected
+            rejected_counter2_e190 = rejected_counter2_e190 + 1;
+        end
+    else % Event 3:737
+        candidate_vec = shifted_vec;
+        candidate_vec(b737_service_beats) = candidate_vec(b737_service_beats) + 1;
+        if sum(candidate_vec) <= capacity
+            next_vec = candidate_vec; % Seated
+            simulation_counter2_737 = simulation_counter2_737 + 1;
+        else
+            next_vec = shifted_vec; %Rejected
+            rejected_counter2_737 = rejected_counter2_737 + 1;
+        end
+    end
+ 
+    curr_state = find(all(valid_states == next_vec, 2), 1);
+    state_history2(time) = curr_state;
+    visit_count(curr_state) = visit_count(curr_state) + 1;
+    observed_distr = visit_count/time;
+    rss_time_state2(time) = sum((observed_distr - v').^2);
+end
+
+sim_seated_total2 = simulation_counter2_e190 + simulation_counter2_737;
+sim_rejected_total2 = rejected_counter2_e190 + rejected_counter2_737;
+sim_arrivals_total2 = sim_seated_total2 + sim_rejected_total2;
+sim_rejection_rate2_e190 = (rejected_counter2_e190/(simulation_counter2_e190+rejected_counter2_e190))*100;
+sim_rejection_rate2_737 = (rejected_counter2_737/(simulation_counter2_737+rejected_counter2_737))*100;
+sim_rejection_rate_total2 = (sim_rejected_total2/sim_arrivals_total2)*100;
+sim_arrivals2_e190 = simulation_counter2_e190 + rejected_counter2_e190;
+sim_arrivals2_737  = simulation_counter2_737  + rejected_counter2_737;
+
+sim_arr_beat2_e190  = sim_arrivals2_e190/steps;
+sim_serv_beat2_e190 = simulation_counter2_e190/steps;
+sim_rej_beat2_e190  = rejected_counter2_e190/steps;
+
+sim_arr_beat2_737   = sim_arrivals2_737/steps;
+sim_serv_beat2_737  = simulation_counter2_737/steps;
+sim_rej_beat2_737   = rejected_counter2_737/steps;
+
+sim_arr_beat2_total  = sim_arrivals_total2/steps;
+sim_serv_beat2_total = sim_seated_total2/steps;
+sim_rej_beat2_total  = sim_rejected_total2/steps;
+
+fprintf("\n\nRESULTS - From State 39 [2 0 0 1 0] (full):\n")
+
+fprintf("After %d beats:\n", steps)
+fprintf(" -e190:\n")
+fprintf("    Arrivals: %d\n", sim_arrivals2_e190)
+fprintf("    Effectively seated: %d\n", simulation_counter2_e190)
+fprintf("    Rejected: %d\n", rejected_counter2_e190)
+
+fprintf(" -737:\n")
+fprintf("    Arrivals: %d\n", sim_arrivals2_737)
+fprintf("    Effectively seated: %d\n", simulation_counter2_737)
+fprintf("    Rejected: %d\n", rejected_counter2_737)
+
+fprintf(" -Total:\n")
+fprintf("    Arrivals: %d\n", sim_arrivals_total2)
+fprintf("    Serviced: %d\n", sim_seated_total2)
+fprintf("    Rejected: %d\n", sim_rejected_total2)
+
+
+fprintf("\nPer beat:\n")
+fprintf(" -e190:\n    Arrivals %.4f\n    Effectively seated %.4f\n    Rejected: %.4f\n", sim_arr_beat2_e190, sim_serv_beat2_e190, sim_rej_beat2_e190)
+fprintf(" -737:\n    Arrivals %.4f\n    Effectively seated %.4f\n    Rejected: %.4f\n", sim_arr_beat2_737, sim_serv_beat2_737, sim_rej_beat2_737)
+fprintf(" -Total:\n    Arrivals %.4f\n    Effectively seated %.4f\n    Rejected: %.4f\n", sim_arr_beat2_total, sim_serv_beat2_total, sim_rej_beat2_total)
+
+
+fprintf("\n    Rejection rate total: %.4f%%\n", sim_rejection_rate_total2)
+fprintf("    Rejection rate 737: %.4f%%\n", sim_rejection_rate2_737)
+fprintf("    Rejection rate e190: %.4f%%\n", sim_rejection_rate2_e190)
+
+
+fprintf("\n___________RSS DIFF. VALUES FOR MY REPORT___________\n")
+checkpoints = [10, 1000, 100000, steps];
+fprintf("Step\t\tEmpty start\t\tFull start\n");
+for checkpoint = 1:length(checkpoints)
+    fprintf("%d\t\t%.6e\t\t%.6e\n", checkpoints(checkpoint), rss_time_state1(checkpoints(checkpoint)), rss_time_state2(checkpoints(checkpoint)));
+end
+
+%------------Warm up time together in log: p0(1) & p0(39)------------------
+
+figure;
+loglog(1:steps, rss_time_state1, "LineWidth", 1.2); % empty start
+hold on;
+loglog(1:steps, rss_time_state2, "LineWidth", 1.2); % full start
+hold off;
+xlabel("Number of steps - log scale", "FontSize", 14);
+ylabel("Residual Sum of Squares (RSS) - log scale", "FontSize", 14);
+title("J(0:3,5) - Warm up time comparison: empty vs. full start", "FontSize", 16);
+legend("Started empty [0 0 0 0 0]", "Started full [2 0 0 1 0]", "Location", "northeast", "FontSize", 12);
+
+%-----------------Both together - visit freq: p0(1) & p0(39)---------------
+
+freq_from_empty = zeros(n_states, 1); %starting from [0 0 0 0 0]
+freq_from_full = zeros(n_states, 1); %starting from [2 0 0 1 0]
+
+%Normalising:
+for state = 1:n_states
+    freq_from_empty(state) = sum(state_history1 == state) / steps;
+    freq_from_full(state)  = sum(state_history2 == state) / steps;
+end
+state_labels = join(string(valid_states), "", 2);
+comparison_values = [v, freq_from_empty, freq_from_full];
+[ranked_v, ranked_order] = sort(v, "descend");
+ranked_state_labels = state_labels(ranked_order);
+ranked_freq_empty = freq_from_empty(ranked_order);
+ranked_freq_full = freq_from_full(ranked_order);
+ranked_comparison_values = [ranked_v, ranked_freq_empty, ranked_freq_full];
+cumulative_v = cumsum(ranked_v) * 100;
+cumulative_empty = cumsum(ranked_freq_empty) * 100;
+cumulative_full = cumsum(ranked_freq_full) * 100;
+
+%Ranking all states
+figure;
+bar(ranked_comparison_values);
+xticks(1:n_states);
+xticklabels(ranked_state_labels);
+xtickangle(90);
+xlabel("States ranked by theoretical probability", "FontSize", 14);
+ylabel("Long-run probability", "FontSize", 14);
+title("J(0:3,5) - Theoretical vs. simulated frequencies ", "FontSize", 16);
+legend("Theory (v)", "Simulated - started empty [0 0 0 0 0]", "Simulated - started full [2 0 0 1 0]", "Location", "northeast", "FontSize", 12);
+
+%Ranked values:
+state_labels = join(string(valid_states), "", 2);
+fprintf("\nRANKING OF STATES\n")
+fprintf("Rank   State   Theory   Empty start    Full start    Cum. theory     Cum. empty     Cum. full     \n")
+
+for rank_number = 1:10
+    fprintf("%d\t%s\t%.4f\t\t%.4f\t\t%.4f\t\t%.4f\t\t%.4f\t\t%.4f\n", ...
+        rank_number, char(ranked_state_labels(rank_number)), ranked_v(rank_number) * 100,...
+        ranked_freq_empty(rank_number) * 100, ranked_freq_full(rank_number) * 100, ...
+        cumulative_v(rank_number), cumulative_empty(rank_number), ...
+        cumulative_full(rank_number));
+end
+
+fprintf("\n--------------------------P4 RUN OK--------------------------\n")
+
+
+%---------------------------P5---------------------------------------------
+%========== (1) Theoretical occupancy =========================
+%Checking theoretical long-term bay occupancy to answer: "how full will the system be?":
+p_empty = 0; %starting counter of 0 bays busy
+p_busy_bay_1 = 0; %starting counter of 1 bay busy
+p_busy_bay_2 = 0; %starting counter of 2 bays busy
+p_full = 0; %starting counter of 3 bays busy
+
+
+for state = 1:n_states
+    occupancy_now = sum(valid_states(state, :));
+    if occupancy_now == 0
+        p_empty = p_empty + v(state);
+    elseif occupancy_now == 1
+        p_busy_bay_1 = p_busy_bay_1 + v(state);
+    elseif occupancy_now == 2
+        p_busy_bay_2 = p_busy_bay_2 + v(state);
+    elseif occupancy_now == 3
+        p_full = p_full + v(state);
+    end
+end
+
+double_check_prob = p_empty + p_busy_bay_1 + p_busy_bay_2 + p_full;
+
+fprintf("Theoretical long-run occupancy shares (from v):\n")
+fprintf("   P(all bays empty)  = %.4f\n", p_empty)
+fprintf("   P(1 bay busy)     = %.4f\n", p_busy_bay_1)
+fprintf("   P(2 bays busy)    = %.4f\n", p_busy_bay_2)
+fprintf("   P(full)   = %.4f\n", p_full)
+fprintf("   Check (should sum to 1): %.4f\n", double_check_prob)
+
+mean_busy_bays = 0*p_empty + 1*p_busy_bay_1 + 2*p_busy_bay_2 + 3*p_full;
+utilisation = mean_busy_bays / capacity;
+fprintf("   Mean number of busy bays = %.4f of %d\n", mean_busy_bays, capacity)
+fprintf("   Long-run utilisation = %.2f%%\n", utilisation * 100)
+
+%========== (2) Theoretical serviced and rejected =========================
+%Counting planes that are being, theoretically in the long term, served and rejected:
+
+served_e190_per_beat = 0; %starting counter from 0
+served_737_per_beat = 0; %starting counter from 0
+rejected_e190_per_beat = 0; %starting counter from 0
+rejected_737_per_beat = 0; %starting counter from 0
+
+for state = 1:n_states
+    occupancy_level_step = (valid_states(state,2) + valid_states(state,3) ...
+                           + valid_states(state,4) + valid_states(state,5));
+ %LOGIC = v(state: how often you're in this state") x (p_beat_X: plane chances of arrival/rejection per beat while in that state)
+    if occupancy_level_step < capacity %Something free
+        served_e190_per_beat = served_e190_per_beat + v(state) * p_beat_e190;
+        served_737_per_beat = served_737_per_beat + v(state) * p_beat_737;
+    else %System busy
+        rejected_e190_per_beat = rejected_e190_per_beat + v(state) * p_beat_e190;
+        rejected_737_per_beat = rejected_737_per_beat + v(state) * p_beat_737;
+    end
+end
+
+%Per beat:
+%---Both:
+served_total_per_beat   = served_e190_per_beat  + served_737_per_beat;
+rejected_total_per_beat = rejected_e190_per_beat + rejected_737_per_beat;
+
+%Per day counters:
+%---e190:
+serviced_e190_per_day = served_e190_per_beat * beats_per_day;
+rejected_e190_per_day = rejected_e190_per_beat * beats_per_day;
+arrival_e190_per_day = p_beat_e190 * beats_per_day;
+%---b737:
+serviced_737_per_day = served_737_per_beat * beats_per_day;
+rejected_737_per_day = rejected_737_per_beat * beats_per_day;
+arrival_737_per_day = p_beat_737* beats_per_day;
+%---Both:
+arrival_total_per_day = arrival_e190_per_day + arrival_737_per_day;
+serviced_total_per_day = serviced_e190_per_day + serviced_737_per_day;
+rejected_total_per_day = rejected_e190_per_day + rejected_737_per_day;
+
+fprintf("\nThe expected parameters in the theoretical long run p/plane-p/beat are as follows:\n")
+fprintf("Note: arrival rates were estimated from ADL Airport data using Python.\n")
+fprintf("Aircraft\tArrivals\tRejected\tServiced\n")
+fprintf("E190\t\t%.4f\t\t%.4f\t\t%.4f\n", p_beat_e190, rejected_e190_per_beat, served_e190_per_beat);
+fprintf("737\t\t%.4f\t\t%.4f\t\t%.4f\n", p_beat_737, rejected_737_per_beat, served_737_per_beat);
+fprintf("Total\t\t%.4f\t\t%.4f\t\t%.4f\n", p_beat_arrival, rejected_total_per_beat, served_total_per_beat);
+
+
+fprintf("\n\nThe expected parameters in the theoretical long run p/plane-p/day are as follows:\n")
+fprintf("Aircraft\tArrivals\tRejected\tServiced\n")
+
+fprintf("E190\t\t%.4f\t\t%.4f\t\t%.4f\n", arrival_e190_per_day, rejected_e190_per_day, serviced_e190_per_day);
+fprintf("737\t\t%.4f\t\t%.4f\t\t%.4f\n", arrival_737_per_day, rejected_737_per_day, serviced_737_per_day);
+fprintf("Total\t\t%.4f\t\t%.4f\t\t%.4f\n", arrival_total_per_day, rejected_total_per_day, serviced_total_per_day);
+
+fprintf("\n--------------------------P5 RUN OK--------------------------\n")
+
+
+%---------------------------P6--------------------------------------------
+
+%========== (1) Occupancy: theory vs, simulated =========================
+%Theory (p_empty..p_full) from P6. Simulated summed from freq_from_empty.
+sim_occ = zeros(4, 1); %positions = 0,1,2,3 bays busy
+for state = 1:n_states
+    occupancy_now = sum(valid_states(state,:));
+    sim_occ(occupancy_now + 1) = sim_occ(occupancy_now + 1) + freq_from_empty(state);
+end
+theo_occ = [p_empty; p_busy_bay_1; p_busy_bay_2; p_full];
+
+figure;
+bar(0:3,[theo_occ, sim_occ]); %two bars per occupancy level
+xlabel("Number of busy bays", "FontSize", 14);
+ylabel("Long-term probability", "FontSize", 14);
+title("J(0:3,5) - System occupancy levels: theory (v) vs. simulated (started empty)", "FontSize", 16);
+legend("Theory (v)", "Simulated - started empty [0 0 0 0 0]", "FontSize", 12);
+
+%========== (2) Revenue per beat: theory vs. simulated ===================
+
+%Puede ser un dato por tabla
+
+fprintf("Plot generated OK.-\n--------------------------P6 RUN OK--------------------------\n")
+
+%---------------------------P7--------------------------------------------
+% Staff rates and numbers:
+n_ground_staff_level_2 = 8;
+n_ground_staff_level_3 = 5;
+n_engineer_level_3 = 1;
+cost_ground_staff_level_2 = 26.95;
+cost_ground_staff_level_3 = 27.54;
+cost_engineer_level_3 = 45.41;
+
+%From assumptions:
+transit_arrival_fee = 14.71;
+e190_seats_capacity = 90;
+b737_seats_capacity = 168;
+e190_occupancy_level = 1; % 100%
+b737_occupancy_level = 1; % 100%
+
+%Cost of a service team p/hour:
+estimated_cost_hour = (n_ground_staff_level_2 * cost_ground_staff_level_2) ...
+    + (n_ground_staff_level_3 * cost_ground_staff_level_3) ...
+    + (n_engineer_level_3 * cost_engineer_level_3);
+
+%Cost of a service team p/beat:
+estimated_cost_beat = estimated_cost_hour * (beat/mins_per_hour);
+
+%Staff costs per aircraft:
+e190_estimated_team_cost_etc = estimated_cost_beat * e190_service_beats;
+b737_estimated_team_cost_etc = estimated_cost_beat * b737_service_beats;
+
+%Arrival fees:
+e190_arrival_fee = e190_seats_capacity * e190_occupancy_level * transit_arrival_fee;
+b737_arrival_fee = b737_seats_capacity*b737_occupancy_level*transit_arrival_fee;
+
+% Contribution after direct staff costs:
+e190_profit = e190_arrival_fee - e190_estimated_team_cost_etc;
+b737_profit = b737_arrival_fee - b737_estimated_team_cost_etc;
+
+%Net contribution per beat of bay time:
+e190_profit_per_beat = e190_profit / e190_service_beats;
+b737_profit_per_beat = b737_profit / b737_service_beats;
+
+
+fprintf("\n___________Economic Layer___________\n")
+
+fprintf("Service team cost p/hour: %.4f AUD\n", estimated_cost_hour)
+fprintf("Complete team cost p/beat: %.4f AUD\n", estimated_cost_beat)
+
+fprintf("e190:\n")
+fprintf("   Service time: %d beats\n", e190_service_beats)
+fprintf("   Service time: %d minutes\n", e190_service_beats * beat)
+fprintf("   Estimated staff cost: %.4f AUD\n", e190_estimated_team_cost_etc)
+fprintf("737:\n")
+fprintf("   Service time: %d beats\n", b737_service_beats)
+fprintf("   Service time: %d minutes\n", b737_service_beats * beat)
+fprintf("   Estimated staff cost: %.4f AUD\n", b737_estimated_team_cost_etc)
+
+
+fprintf("\nNet profit per aircraft:\n")
+fprintf("e190: %.4f - %.4f = %.4f AUD, Contribution p/beat %.4f AUD\n", e190_arrival_fee, e190_estimated_team_cost_etc, e190_profit, e190_profit_per_beat)
+fprintf("737: %.4f - %.4f = %.4f AUD, Contribution p/beat %.4f AUD\n", b737_arrival_fee, b737_estimated_team_cost_etc, b737_profit, b737_profit_per_beat)
+fprintf("In terms of net comtribution: The 737 is worth %.2f%% p/beat p/bay than the e190.\n", ((b737_profit_per_beat/e190_profit_per_beat) - 1) * 100)
+fprintf("\n--------------------------P7 RUN OK--------------------------\n")
+
+%---------------------------P8--------------------------------------------
+%Sensitivity: how does rejection rate change if arrivals increasing?
+
+next_N = zeros(n_states, 1);%after "no arrival"
+next_S = zeros(n_states, 1);%after an e190
+next_L = zeros(n_states, 1);%after a 737
+for state = 1:n_states
+    current_vec = valid_states(state, :);
+    shifted_vec= [current_vec(2:end), 0];
+    next_N(state) = find(all(valid_states == shifted_vec, 2), 1);%No arrival
+    candidate_vec = shifted_vec;%e190
+    candidate_vec(e190_service_beats) = candidate_vec(e190_service_beats) + 1;
+    if sum(candidate_vec) > capacity, candidate_vec = shifted_vec;
+    end
+    next_S(state) = find(all(valid_states == candidate_vec, 2), 1);
+    candidate_vec = shifted_vec;%737
+    candidate_vec(b737_service_beats) = candidate_vec(b737_service_beats) + 1;
+    if sum(candidate_vec) > capacity, candidate_vec = shifted_vec;
+    end
+    next_L(state) = find(all(valid_states == candidate_vec, 2), 1);
+end
+
+factor_min = 0.0; %minimum amplifier
+factor_step = 0.1; %gap between factors
+factor_max = 2.5; %max tested
+amplified = factor_min : factor_step:factor_max;
+n_factors = length(amplified);
+
+x_ampli_e190 = zeros(n_factors, 1); % ampli e190 prob
+x_ampli_737= zeros(n_factors, 1); %%ampli 737 prob
+x_ampli =zeros(n_factors, 1);
+y_ampli = zeros(n_factors, 1);
+
+%"Projected" values
+expected_e190_arrivals= zeros(n_factors, 1);
+expected_b737_arrivals= zeros(n_factors, 1);
+expected_e190_accepted=zeros(n_factors, 1);
+expected_b737_accepted= zeros(n_factors, 1);
+expected_e190_rejected= zeros(n_factors, 1);
+expected_b737_rejected= zeros(n_factors, 1);
+captured_net_revenue = zeros(n_factors, 1);
+missed_net_revenue= zeros(n_factors, 1);
+potential_net_revenue = zeros(n_factors, 1);
+missed_e190_net_revenue= zeros(n_factors,1);
+missed_737_net_revenue =zeros(n_factors, 1);
+% Economic evaluation period
+t = beats_per_day;
+for m = 1:length(amplified)
+    p_e190_amplified = p_beat_e190*amplified(m); %amplified probs
+    p_737_amplified = p_beat_737*amplified(m);
+    p_n_amplified = 1 - p_e190_amplified - p_737_amplified;
+    if p_n_amplified < 0
+        x_ampli(m) = p_e190_amplified + p_737_amplified;
+        y_ampli(m) = NaN;
+        expected_e190_arrivals(m)= NaN;
+        expected_b737_arrivals(m)= NaN;
+        expected_e190_accepted(m)= NaN;
+        expected_b737_accepted(m)= NaN;
+        expected_e190_rejected(m)= NaN;
+        expected_b737_rejected(m)= NaN;
+        captured_net_revenue(m)=NaN;
+        missed_net_revenue(m) =NaN;
+        missed_e190_net_revenue(m) =NaN;
+        missed_737_net_revenue(m) =NaN;
+        potential_net_revenue(m) =NaN;
+        continue
+    end
+
+    P_trans_matrix_amplified = zeros(n_states, n_states);%rebuild P
+    for state = 1:n_states
+        P_trans_matrix_amplified(state, next_N(state)) = P_trans_matrix_amplified(state, next_N(state)) + p_n_amplified;
+        P_trans_matrix_amplified(state, next_S(state)) = P_trans_matrix_amplified(state, next_S(state)) + p_e190_amplified;
+        P_trans_matrix_amplified(state, next_L(state)) = P_trans_matrix_amplified(state, next_L(state)) + p_737_amplified;
+    end
+    [eig_vec_ampli, eig_val_ampli] = eig(P_trans_matrix_amplified');
+    eig_val_ampli = diag(eig_val_ampli);
+    column_eig_ampli = find(abs(eig_val_ampli - 1) < tolerance);
+    if length(column_eig_ampli) ~= 1
+        fprintf("Multiplier %.1f: %d eigenvalues equal to 1 --> TSD is NOT unique!\n", amplified(m), length(column_eig_ampli))
+    end
+    v_ampli = real(eig_vec_ampli(:, column_eig_ampli(1))); %extracting eigenvector
+    v_ampli = v_ampli / sum(v_ampli); %Normalising
+
+    %Double checking (v * P = v):
+    diff_v_ampli = norm(v_ampli' * P_trans_matrix_amplified - v_ampli');
+    if diff_v_ampli > tolerance
+        fprintf("Multiplier %.1f: v is NOT the stationary distribution (difference %.10f)\n", amplified(m), diff_v_ampli)
+    end
+    reject_prob = 0;    %Rejection probability w. states are full after the shift
+    for state = 1:n_states
+        occupancy_level_step = (valid_states(state,2) + valid_states(state,3) +valid_states(state,4) + valid_states(state,5));
+        if occupancy_level_step >= capacity %reject
+            reject_prob = reject_prob + v_ampli(state);
+        end
+    end
+    
+    x_ampli(m)= p_e190_amplified + p_737_amplified;
+    x_ampli_e190(m) = p_e190_amplified;
+    x_ampli_737(m)  = p_737_amplified;
+    y_ampli(m)= reject_prob * 100;
+    expected_e190_arrivals(m) = t * p_e190_amplified;
+    expected_b737_arrivals(m) = t * p_737_amplified;
+    expected_e190_accepted(m) = expected_e190_arrivals(m) * (1 - reject_prob);% Expected accepted aircraft
+    expected_b737_accepted(m) = expected_b737_arrivals(m) * (1 - reject_prob);% Expected accepted aircraft
+    expected_e190_rejected(m) = expected_e190_arrivals(m) * reject_prob;% Expected rejected aircraft
+    expected_b737_rejected(m) = expected_b737_arrivals(m) * reject_prob;% Expected rejected aircraft
+
+    % Economic results for this multiplier
+    captured_net_revenue(m) = expected_e190_accepted(m) * e190_profit + expected_b737_accepted(m) * b737_profit;
+    missed_e190_net_revenue(m)= expected_e190_rejected(m) * e190_profit;
+    missed_737_net_revenue(m) = expected_b737_rejected(m) *b737_profit;
+    missed_net_revenue(m) = missed_e190_net_revenue(m) + missed_737_net_revenue(m);
+    potential_net_revenue(m) = captured_net_revenue(m) + missed_net_revenue(m);
+end
+
+expected_total_rejected = expected_e190_rejected + expected_b737_rejected;
+valid = ~isnan(y_ampli);
+figure;
+plot(amplified(valid), expected_e190_rejected(valid), "-o", "LineWidth", 1.5, "MarkerSize", 5);
+hold on;
+plot(amplified(valid), expected_b737_rejected(valid), "-o", "LineWidth", 1.5, "MarkerSize", 5);
+plot(amplified(valid), expected_total_rejected(valid), "-o", "LineWidth", 1.5, "MarkerSize", 5);
+xline(1, "--", "Original estimated arrival probability", "LabelVerticalAlignment", "bottom","FontSize", 12);
+xlabel("Arrival-probability multiplier", "FontSize", 14);
+ylabel("Expected rejected aircraft per model per day", "FontSize", 14);
+title("J(0:3,5) - Expected rejected aircraft under amplified arrival probability", "FontSize", 16);
+legend("e190 rejected","737 rejected", "Total rejected", "Original estimated arrival probability","Location", "northwest","FontSize", 12);
+hold off;
+%---------------------------P9--------------------------------------------
+%Values projected:
+
+fprintf("Multiplier   Reject %%  e190 arrivals   e190 accepted   ");
+fprintf("e190 rejected   737 arrivals   737 accepted   737 rejected\n");
+
+for m = 1:length(amplified)
+    if isnan(y_ampli(m))
+        continue
+    end
+    fprintf(["%10.2f   %8.2f   %13.3f   %13.3f   %13.3f   %12.3f   %12.3f   %12.3f\n"], amplified(m), y_ampli(m), expected_e190_arrivals(m), expected_e190_accepted(m), expected_e190_rejected(m), expected_b737_arrivals(m), expected_b737_accepted(m), expected_b737_rejected(m));
+end
+
+fprintf("Multiplier   Reject %%     Captured AUD   Missed e190   Missed 737    Missed AUD    Potential AUD\n");
+for m = 1:length(amplified)
+    if isnan(y_ampli(m))
+        continue
+    end
+    fprintf("%10.2f   %8.2f   %14.2f   %11.2f   %11.2f   %11.2f   %13.2f\n",amplified(m), y_ampli(m), captured_net_revenue(m), missed_e190_net_revenue(m), missed_737_net_revenue(m), missed_net_revenue(m), potential_net_revenue(m));
+end
+
+%Summarising both distances to report:
+fprintf("\n___________SUMMARY - VALUES FOR MY REPORT___________\n")
+
+fprintf("                  Theory     Simulation 1 (empty)  Simulation 2(full)\n")
+fprintf("e190 arrivals   %9.5f  %9.5f  %9.5f\n", p_beat_e190, sim_arr_beat1_e190, sim_arr_beat2_e190)
+fprintf("e190 serviced   %9.5f  %9.5f  %9.5f\n", served_e190_per_beat, sim_serv_beat1_e190, sim_serv_beat2_e190)
+fprintf("e190 rejected   %9.5f  %9.5f  %9.5f\n", rejected_e190_per_beat, sim_rej_beat1_e190, sim_rej_beat2_e190)
+fprintf("737  arrivals   %9.5f  %9.5f  %9.5f\n", p_beat_737, sim_arr_beat1_737, sim_arr_beat2_737)
+fprintf("737  serviced   %9.5f  %9.5f  %9.5f\n", served_737_per_beat, sim_serv_beat1_737, sim_serv_beat2_737)
+fprintf("737  rejected   %9.5f  %9.5f  %9.5f\n", rejected_737_per_beat, sim_rej_beat1_737, sim_rej_beat2_737)
+fprintf("TOTAL arrivals  %9.5f  %9.5f  %9.5f\n", p_beat_arrival, sim_arr_beat1_total, sim_arr_beat2_total)
+fprintf("TOTAL serviced  %9.5f  %9.5f  %9.5f\n", served_total_per_beat, sim_serv_beat1_total, sim_serv_beat2_total)
+fprintf("TOTAL rejected  %9.5f  %9.5f  %9.5f\n", rejected_total_per_beat, sim_rej_beat1_total, sim_rej_beat2_total)
+
+
+valid = ~isnan(y_ampli);
+figure;
+plot(amplified(valid), y_ampli(valid), '-o', 'LineWidth', 1.5, 'MarkerSize', 5);
+hold on;
+% Mark the original estimated arrival rates
+xline(1,"--", "Original estimated arrival probability", "LabelVerticalAlignment", "bottom", "FontSize", 12);
+xlabel("Arrival-probability multiplier", "FontSize", 14);
+ylabel("Theoretical rejection percentage (%)", "FontSize", 14);
+title("J(0:3,5) - Effect of amplified arrivals on rejection rate", "FontSize", 16);
+
+
+valid_economic = ~isnan(captured_net_revenue) & ~isnan(missed_net_revenue);
+figure;
+plot(amplified(valid_economic), captured_net_revenue(valid_economic), "-o", "LineWidth", 1.5, "MarkerSize", 5);
+hold on;
+plot(amplified(valid_economic), missed_net_revenue(valid_economic), "-o", "LineWidth", 1.5, "MarkerSize", 5);
+plot(amplified(valid_economic), missed_737_net_revenue(valid_economic), "-o","LineWidth", 1.2, "MarkerSize", 5);
+plot(amplified(valid_economic), missed_e190_net_revenue(valid_economic), "-o", "LineWidth", 1.2, "MarkerSize", 5);
+hold off;
+xline(1, '--', 'Original estimated arrival probability', 'LabelVerticalAlignment', 'bottom', "FontSize", 12);
+xlabel('Arrival-probability multiplier', "FontSize", 14);
+ylabel('Estimated net revenue per model day (AUD)', "FontSize", 14);
+title('J(0:3,5) - Captured and missed net revenue', "FontSize", 16);
+legend('Captured (total)', 'Missed (total)', 'Missed - 737', 'Missed - e190', 'Location', 'northwest', "FontSize", 12);
+
+
+fprintf("\n--------------------------P9 RUN OK--------------------------\n")
+
+save("Part2-5_h3_weighted.mat", "h", "valid_states", "n_states", ...
+    "P_trans_matrix", "eig_vector", "eig_value", "v", "column_eig", ...
+    "v_step", "diff_v", ...
+    "simulation_counter1_e190", ...
+    "simulation_counter1_737","simulation_counter2_e190", ...
+    "simulation_counter2_737")
+
+disp("Correctly saved")
